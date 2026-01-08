@@ -45,6 +45,8 @@ if arquivo and st.button("⬇️ Iniciar Downloads"):
 
     # Set para armazenar chaves de CT-e cancelados
     ctes_cancelados = set()
+    qtd_cancelados = 0
+    qtd_processados = 0
 
     for idx, row in df.iterrows():
         empresa = row["Empresa"]
@@ -112,11 +114,12 @@ if arquivo and st.button("⬇️ Iniciar Downloads"):
 
                                 # 🔍 Verifica se é um evento de Cancelamento
                                 desc_evento = root.find(".//ns:descEvento", ns)
-                                if desc_evento is not None and "Cancelamento" in (desc_evento.text or ""):
+                                if desc_evento is not None and "cancelamento" in (desc_evento.text or "").lower():
                                     # É um cancelamento, pega a chave e salva no set
                                     ch_cte_cancelado = root.findtext(".//ns:chCTe", "", ns)
                                     if ch_cte_cancelado:
                                         ctes_cancelados.add(ch_cte_cancelado)
+                                    qtd_cancelados += 1
                                     # Pula este XML para não gerar linha vazia/duplicada
                                     continue
 
@@ -141,6 +144,7 @@ if arquivo and st.button("⬇️ Iniciar Downloads"):
                                     "Emitente": emit.text if emit is not None else "",
                                     "Destinatário": dest.text if dest is not None else "",
                                 })
+                                qtd_processados += 1
 
                             except Exception as e:
                                 st.warning(f"Erro ao processar XML: {nome_arquivo} - {e}")
@@ -162,6 +166,11 @@ if arquivo and st.button("⬇️ Iniciar Downloads"):
         for item in st.session_state.resumo_ctes:
             if item.get("Chave") in ctes_cancelados:
                 item["Status"] = "Cancelado"
+    
+    st.info(f"📊 Processamento concluído: {qtd_processados} CT-es adicionados, {qtd_cancelados} eventos de cancelamento identificados.")
+
+    if not st.session_state.resumo_ctes:
+        st.warning("⚠️ Nenhum CT-e autorizado foi encontrado nos arquivos baixados. A planilha de resumo estará vazia.")
 
 # 🔽 Exibe botões de download dos arquivos XML
 if st.session_state.arquivos_cte:
