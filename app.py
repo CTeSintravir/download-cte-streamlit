@@ -176,12 +176,12 @@ if arquivo and st.button("⬇️ Iniciar Downloads"):
 if st.session_state.arquivos_cte:
     st.markdown("## 📦 Lotes CT-e por Empresa")
     
-    colunas_cte = st.columns(5)  # Layout de grade com 5 colunas
+    colunas_cte = st.columns(3)  # Layout de grade com 3 colunas
     itens_cte = list(st.session_state.arquivos_cte.items())
 
     for i, (cnpj, zip_data) in enumerate(itens_cte):
         if zip_data:
-            with colunas_cte[i % 5]:
+            with colunas_cte[i % 3]:
                 st.download_button(
                     label=f"📥 Baixar CT-e\n{cnpj}",
                     data=zip_data,
@@ -192,15 +192,20 @@ if st.session_state.arquivos_cte:
 
 if st.session_state.arquivos_mdfe:
     st.markdown("## 🚛 Lotes MDF-e por Empresa")
-    for cnpj, zip_data in st.session_state.arquivos_mdfe.items():
+
+    colunas_mdfe = st.columns(3)  # Layout de grade com 3 colunas
+    itens_mdfe = list(st.session_state.arquivos_mdfe.items())
+
+    for i, (cnpj, zip_data) in enumerate(itens_mdfe):
         if zip_data:
-            st.download_button(
-                label=f"📥 Baixar MDF-e - {cnpj}",
-                data=zip_data,
-                file_name=f"MDFe_{cnpj}.zip",
-                mime="application/zip",
-                key=f"mdfe_{cnpj}"
-            )
+            with colunas_mdfe[i % 3]:
+                st.download_button(
+                    label=f"📥 Baixar MDF-e\n{cnpj}",
+                    data=zip_data,
+                    file_name=f"MDFe_{cnpj}.zip",
+                    mime="application/zip",
+                    key=f"mdfe_{cnpj}"
+                )
 
 # 🔽 Download da planilha Excel com resumo
 if st.session_state.resumo_ctes:
