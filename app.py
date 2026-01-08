@@ -210,6 +210,7 @@ if arquivo and st.button("⬇️ Iniciar Downloads"):
             st.session_state.arquivos_cte[cnpj] = None
 
         # Baixa MDF-e
+        resposta_mdfe = sessao.get(url_mdfe)
         if resposta_mdfe.status_code == 200 and "application/zip" in resposta_mdfe.headers.get("Content-Type", ""):
             st.success(f"📥 MDF-e baixado para {empresa}")
             st.session_state.arquivos_mdfe[cnpj] = resposta_mdfe.content
