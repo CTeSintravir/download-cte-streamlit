@@ -30,9 +30,9 @@ arquivo = st.file_uploader("📁 Enviar planilha", type=["xlsx"])
 
 col1, col2 = st.columns(2)
 with col1:
-    data_inicial = st.date_input("📅 Data Inicial", value=date(2026, 1, 1))
+    data_inicial = st.date_input("📅 Data Inicial", value=date(2026, 1, 1), format="DD/MM/YYYY")
 with col2:
-    data_final = st.date_input("📅 Data Final", value=date(2026, 1, 31))
+    data_final = st.date_input("📅 Data Final", value=date(2026, 1, 31), format="DD/MM/YYYY")
 
 if arquivo and st.button("⬇️ Iniciar Downloads"):
     df = pd.read_excel(arquivo)
