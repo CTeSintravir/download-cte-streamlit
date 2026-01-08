@@ -8,6 +8,55 @@ from io import BytesIO
 import zipfile
 import xml.etree.ElementTree as ET
 
+def gerar_excel_completo(dados_lista):
+    if not dados_lista:
+        return None
+    
+    df_full = pd.DataFrame(dados_lista)
+    output = BytesIO()
+    
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        # 1. Aba Resumo Geral
+        if not df_full.empty:
+            resumo = df_full.groupby(["CNPJ", "Empresa"]).agg(
+                Total_Emitido=("Chave", "count"),
+                Total_Cancelado=("Status", lambda x: (x == "Cancelado").sum())
+            ).reset_index()
+            
+            # Renomear colunas
+            resumo.rename(columns={
+                "Empresa": "Transportadora", 
+                "Total_Emitido": "Total Emitido", 
+                "Total_Cancelado": "Total Cancelado"
+            }, inplace=True)
+            
+            # Reordenar colunas
+            resumo = resumo[["CNPJ", "Transportadora", "Total Emitido", "Total Cancelado"]]
+            resumo.to_excel(writer, index=False, sheet_name="Resumo Geral")
+            
+            # Formatar largura das colunas (opcional, básico)
+            workbook = writer.book
+            worksheet = writer.sheets["Resumo Geral"]
+            format_header = workbook.add_format({'bold': True, 'bg_color': '#D3D3D3', 'border': 1})
+            for col_num, value in enumerate(resumo.columns.values):
+                worksheet.write(0, col_num, value, format_header)
+                worksheet.set_column(col_num, col_num, 25)
+
+        # 2. Abas por empresa
+        if not df_full.empty:
+            empresas = df_full["Empresa"].unique()
+            for emp in empresas:
+                df_emp = df_full[df_full["Empresa"] == emp]
+                # Tratar nome da aba: max 31 chars, remover caracteres inválidos
+                safe_name = "".join([c for c in str(emp) if c not in "[]:*?/\\"])
+                safe_name = safe_name[:31]
+                if not safe_name: 
+                    safe_name = "Detalhes"
+                
+                df_emp.to_excel(writer, index=False, sheet_name=safe_name)
+
+    return output.getvalue()
+
 st.set_page_config(page_title="Download de CT-e XMLs", layout="centered")
 st.title("📦 Download de CT-e (Lote XML) - MultiTransportador")
 
@@ -16,6 +65,9 @@ st.markdown("Envie a planilha com colunas: **Empresa, CNPJ, Usuario, Senha**")
 # Session State
 if "resumo_ctes" not in st.session_state:
     st.session_state.resumo_ctes = []
+
+if "resumo_mdfes" not in st.session_state:
+    st.session_state.resumo_mdfes = []
 
 if "resultados" not in st.session_state:
     st.session_state.resultados = []
@@ -42,11 +94,17 @@ if arquivo and st.button("⬇️ Iniciar Downloads"):
     st.session_state.resultados.clear()
     st.session_state.arquivos_cte.clear()
     st.session_state.arquivos_mdfe.clear()
+    st.session_state.resumo_mdfes.clear()
 
     # Set para armazenar chaves de CT-e cancelados
     ctes_cancelados = set()
+    mdfes_cancelados = set()
+    
     qtd_cancelados = 0
     qtd_processados = 0
+    
+    qtd_cancelados_mdfe = 0
+    qtd_processados_mdfe = 0
 
     for idx, row in df.iterrows():
         empresa = row["Empresa"]
@@ -152,10 +210,57 @@ if arquivo and st.button("⬇️ Iniciar Downloads"):
             st.session_state.arquivos_cte[cnpj] = None
 
         # Baixa MDF-e
-        resposta_mdfe = sessao.get(url_mdfe)
         if resposta_mdfe.status_code == 200 and "application/zip" in resposta_mdfe.headers.get("Content-Type", ""):
             st.success(f"📥 MDF-e baixado para {empresa}")
             st.session_state.arquivos_mdfe[cnpj] = resposta_mdfe.content
+            
+            # Processa o ZIP do MDF-e para extrair dados
+            try:
+                zip_bytes_mdfe = BytesIO(resposta_mdfe.content)
+                with zipfile.ZipFile(zip_bytes_mdfe, "r") as zip_ref_mdfe:
+                    for nome_arquivo in zip_ref_mdfe.namelist():
+                        if nome_arquivo.lower().endswith(".xml"):
+                            with zip_ref_mdfe.open(nome_arquivo) as xml_file:
+                                try:
+                                    tree = ET.parse(xml_file)
+                                    root = tree.getroot()
+                                    ns = {"ns": root.tag.split("}")[0].strip("{")}
+
+                                    # 🔍 Verifica se é um evento de Cancelamento MDF-e
+                                    desc_evento = root.find(".//ns:descEvento", ns)
+                                    if desc_evento is not None and "cancelamento" in (desc_evento.text or "").lower():
+                                        ch_mdfe_cancelado = root.findtext(".//ns:chMDFe", "", ns)
+                                        if ch_mdfe_cancelado:
+                                            mdfes_cancelados.add(ch_mdfe_cancelado)
+                                        qtd_cancelados_mdfe += 1
+                                        continue
+
+                                    ide = root.find(".//ns:ide", ns)
+                                    infMDFe = root.find(".//ns:infMDFe", ns)
+                                    emit = root.find(".//ns:emit/ns:xNome", ns)
+                                    status_prot = root.find(".//ns:protMDFe/ns:infProt/ns:xMotivo", ns)
+                                    
+                                    chave = infMDFe.attrib.get("Id", "").replace("MDFe", "") if infMDFe is not None else ""
+                                    
+                                    st.session_state.resumo_mdfes.append({
+                                        "Empresa": empresa,
+                                        "CNPJ": cnpj,
+                                        "Número": ide.findtext("ns:nMDF", "", ns) if ide is not None else "",
+                                        "Série": ide.findtext("ns:serie", "", ns) if ide is not None else "",
+                                        "Chave": chave,
+                                        "Data de Emissão": ide.findtext("ns:dhEmi", "", ns)[:10] if ide is not None else "",
+                                        "Status": status_prot.text if status_prot is not None else "Autorizado",
+                                        "Emitente": emit.text if emit is not None else "",
+                                    })
+                                    qtd_processados_mdfe += 1
+
+                                except Exception as e:
+                                    # Erros pontuais em XMLs não devem parar o fluxo
+                                    # st.warning(f"Erro XML MDFe: {nome_arquivo}")
+                                    pass
+            except Exception as e:
+                st.warning(f"Erro ao ler ZIP MDF-e: {e}")
+
         else:
             st.session_state.arquivos_mdfe[cnpj] = None
 
@@ -166,11 +271,21 @@ if arquivo and st.button("⬇️ Iniciar Downloads"):
         for item in st.session_state.resumo_ctes:
             if item.get("Chave") in ctes_cancelados:
                 item["Status"] = "Cancelado"
-    
-    st.info(f"📊 Processamento concluído: {qtd_processados} CT-es adicionados, {qtd_cancelados} eventos de cancelamento identificados.")
 
-    if not st.session_state.resumo_ctes:
-        st.warning("⚠️ Nenhum CT-e autorizado foi encontrado nos arquivos baixados. A planilha de resumo estará vazia.")
+    # 🔄 Atualiza status dos MDF-es cancelados na lista final
+    if mdfes_cancelados:
+        for item in st.session_state.resumo_mdfes:
+            if item.get("Chave") in mdfes_cancelados:
+                item["Status"] = "Cancelado"
+    
+    st.info(
+        f"📊 Processamento concluído:\n"
+        f"- CT-e: {qtd_processados} processados, {qtd_cancelados} cancelados.\n"
+        f"- MDF-e: {qtd_processados_mdfe} processados, {qtd_cancelados_mdfe} cancelados."
+    )
+
+    if not st.session_state.resumo_ctes and not st.session_state.resumo_mdfes:
+        st.warning("⚠️ Nenhum documento (CT-e ou MDF-e) autorizado foi encontrado nos arquivos baixados.")
 
 # 🔽 Exibe botões de download dos arquivos XML
 if st.session_state.arquivos_cte:
@@ -208,21 +323,38 @@ if st.session_state.arquivos_mdfe:
                 )
 
 # 🔽 Download da planilha Excel com resumo
-if st.session_state.resumo_ctes:
-    df_resumo = pd.DataFrame(st.session_state.resumo_ctes)
-    output_excel = BytesIO()
-    with pd.ExcelWriter(output_excel, engine="xlsxwriter") as writer:
-        df_resumo.to_excel(writer, index=False, sheet_name="Resumo_CTes")
+# 🔽 Download dos relatórios Excel (CT-e e MDF-e Separados)
+if st.session_state.resumo_ctes or st.session_state.resumo_mdfes:
+    st.markdown("## 📑 Relatórios de Resumo")
+    col_dl1, col_dl2 = st.columns(2)
+    
+    # Botão para CT-e
+    if st.session_state.resumo_ctes:
+        excel_cte_data = gerar_excel_completo(st.session_state.resumo_ctes)
+        if excel_cte_data:
+            with col_dl1:
+                st.download_button(
+                    label="📄 Baixar Resumo CT-e (.xlsx)",
+                    data=excel_cte_data,
+                    file_name="Resumo_CTes_Completo.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="resumo_excel_cte"
+                )
 
-    st.success("✅ Planilha de resumo gerado com sucesso!")
+    # Botão para MDF-e
+    if st.session_state.resumo_mdfes:
+        excel_mdfe_data = gerar_excel_completo(st.session_state.resumo_mdfes)
+        if excel_mdfe_data:
+            with col_dl2:
+                st.download_button(
+                    label="📄 Baixar Resumo MDF-e (.xlsx)",
+                    data=excel_mdfe_data,
+                    file_name="Resumo_MDFes_Completo.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="resumo_excel_mdfe"
+                )
 
-    st.download_button(
-        label="📄 Baixar Resumo CT-es",
-        data=output_excel.getvalue(),
-        file_name="Resumo_CTes.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="resumo_excel"
-    )
+    st.success("✅ Relatórios gerados com sucesso! Use os botões acima para baixar.")
 
 # 🔽 Tabela resumo das operações
 if st.session_state.resultados:
